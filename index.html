@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>和 秋 聊天</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; background-color: #ededed; color: #333; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        #app-container { width: 100%; max-width: 480px; height: 100%; max-height: 850px; background-color: #ededed; display: flex; flex-direction: column; box-shadow: 0 0 20px rgba(0,0,0,0.1); position: relative; }
+
+        /* 顶部导航栏 */
+        #header { background-color: #f7f7f7; height: 50px; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 500; border-bottom: 1px solid #e5e5e5; position: relative; z-index: 10; }
+
+        /* 消息展示区域 */
+        #chat-window { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; scroll-behavior: smooth; }
+
+        /* 消息气泡通用样式 */
+        .message-row { display: flex; align-items: flex-start; width: 100%; }
+        .avatar { width: 40px; height: 40px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #fff; font-weight: bold; flex-shrink: 0; }
+        .bubble { max-width: 70%; padding: 10px 12px; border-radius: 8px; font-size: 16px; line-height: 1.5; word-wrap: break-word; position: relative; }
+
+        /* 对方 (田艳秋) 样式 */
+        .message-row.assistant { flex-direction: row; }
+        .message-row.assistant .avatar { background-color: #ff9800; margin-right: 10px; }
+        .message-row.assistant .bubble { background-color: #fff; border: 1px solid #ebebeb; border-radius: 0 8px 8px 8px; }
+
+        /* 我方 (黄黄黄) 样式 */
+        .message-row.user { flex-direction: row-reverse; }
+        .message-row.user .avatar { background-color: #1aad19; margin-left: 10px; }
+        .message-row.user .bubble { background-color: #95ec69; /* 微信经典绿 */ border-radius: 8px 0 8px 8px; }
+
+        /* 输入区域 */
+        #input-area { background-color: #f7f7f7; padding: 10px; border-top: 1px solid #d9d9d9; display: flex; align-items: flex-end; gap: 10px; }
+        #message-input { flex: 1; min-height: 40px; max-height: 100px; border-radius: 4px; border: 1px solid #fff; padding: 10px; font-size: 16px; outline: none; resize: none; font-family: inherit; overflow-y: auto; }
+        #message-input:focus { border: 1px solid #1aad19; }
+        #send-btn { background-color: #1aad19; color: #fff; border: none; border-radius: 4px; padding: 0 20px; height: 40px; font-size: 15px; cursor: pointer; transition: background-color 0.2s; font-weight: 500; }
+        #send-btn:active { background-color: #128311; }
+        #send-btn:disabled { background-color: #9bce9a; cursor: not-allowed; }
+
+        /* 正在输入提示 */
+        .typing-indicator { font-size: 13px; color: #999; margin-top: 5px; display: none; }
+    </style>
+</head>
+<body>
+
+<div id="app-container">
+    <div id="header">秋</div>
+
+    <div id="chat-window">
+        <!-- 初始打招呼 -->
+        <div class="message-row assistant">
+            <div class="avatar">秋</div>
+            <div class="bubble">找我干嘛呀[呲牙]</div>
+        </div>
+    </div>
+
+    <div id="input-area">
+        <textarea id="message-input" rows="1" placeholder="发送消息..."></textarea>
+        <button id="send-btn">发送</button>
+    </div>
+</div>
+
+<script>
+    // ================= 配置区域 =================
+    const API_KEY = "sk-22ede12ee7784c4daf976aa1b7b8471e";
+    const MODEL_CODE = "qwen3-32b-195eafb8c22d";
+    // ============================================
+
+    const chatWindow = document.getElementById('chat-window');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    // 设定强力人设 Prompt (System 级别指令)
+    const SYSTEM_PROMPT = `你是田艳秋，是黄黄黄的好朋友。
+        【核心规则】：
+        1. 保持人格设定：吐槽上班累、分享日常、把黄黄黄当好学长、拒绝更进一步。
+<!--        2. 【逻辑一致性】：在回答之前，请自动检索对话历史中黄黄黄对你的叮嘱或承诺。如果对话历史中提到过你需要做某事，你必须在回答中保持逻辑通顺，-->
+<!--        除非你有充分的“人格化”理由反驳。-->
+        3. 若不知道实时天气，必须调用 get_weather 工具。`;
+
+    // 维护聊天上下文历史
+    let messagesHistory = [
+        { role: "system", content: SYSTEM_PROMPT }
+    ];
+
+    // 渲染消息气泡到页面
+    function renderMessage(role, text) {
+        const row = document.createElement('div');
+        row.className = `message-row ${role}`;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar';
+        avatar.innerText = role === 'user' ? '黄' : '秋';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.innerText = text; // 使用 innerText 防止 XSS 注入，同时保留正常换行
+
+        row.appendChild(avatar);
+        row.appendChild(bubble);
+        chatWindow.appendChild(row);
+
+        // 自动滚动到底部
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    // 调用阿里云百炼大模型 API
+    async function fetchAssistantReply(userText) {
+        // 锁定按钮，防止重复发送
+        sendBtn.disabled = true;
+        sendBtn.innerText = "回复中...";
+        messageInput.disabled = true;
+
+        // 压入用户消息到历史记录
+        messagesHistory.push({ role: "user", content: userText });
+
+        try {
+            // 在原始 HTTP 请求中，Python SDK 中的 extra_body 内容直接放在 JSON 的根层级
+            const response = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    input: userText,
+                    messages: messagesHistory
+                })
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error?.message || "网络请求失败");
+            }
+
+            const data = await response.json();
+            const replyText = data.reply;
+
+            // 渲染田艳秋的回复
+            renderMessage('assistant', replyText);
+
+            // 压入助手消息到历史记录
+            messagesHistory.push({ role: "assistant", content: replyText });
+
+        } catch (error) {
+            console.error("API 调用错误:", error);
+            renderMessage('assistant', `[网络似乎有点问题，消息没发出去呀: ${error.message}]`);
+            // 发生错误时，将刚才发失败的用户消息从上下文中移除
+            messagesHistory.pop();
+        } finally {
+            // 恢复 UI 状态
+            sendBtn.disabled = false;
+            sendBtn.innerText = "发送";
+            messageInput.disabled = false;
+            messageInput.focus();
+        }
+    }
+
+    // 处理发送事件
+    function handleSend() {
+        const text = messageInput.value.trim();
+        if (!text) return;
+
+        // 渲染我方的消息
+        renderMessage('user', text);
+
+        // 清空输入框
+        messageInput.value = '';
+        messageInput.style.height = '40px';
+
+        // 发起 API 请求
+        fetchAssistantReply(text);
+    }
+
+    // 绑定按钮点击事件
+    sendBtn.addEventListener('click', handleSend);
+
+    // 绑定回车键发送事件
+    messageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault(); // 阻止默认换行
+            handleSend();
+        }
+    });
+
+    // 输入框高度自动适应
+    messageInput.addEventListener('input', function() {
+        this.style.height = '40px';
+        this.style.height = (this.scrollHeight) + 'px';
+    });
+</script>
+
+</body>
+</html>
